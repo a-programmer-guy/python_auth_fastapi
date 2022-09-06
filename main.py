@@ -3,7 +3,7 @@ import jwt
 # Depends class will make is so depending on the
 # result of the RequestForm, will determine what happens next
 from enum import unique
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException, status
 # Import bcrypt for hashing passwords
 from passlib.hash import bcrypt
 
@@ -43,7 +43,7 @@ User_Pydantic = pydantic_model_creator(User, name='User')
 # Exclude read only - If user passes in data needed to update db
 UserIn_Pydantic = pydantic_model_creator(User, name='UserIn', exclude_readonly=True)
 
-# Endpoint for post request that generates a token if the user exists and has a password
+# POST endpoint to generate a token if the username exists and password is correct
 @app.post('/token')
 async def generate_token(form_data: OAuth2PasswordRequestForm = Depends()):
   # Authenticate the user with authenticate_user method, use form data sent in post req
@@ -61,12 +61,23 @@ async def generate_token(form_data: OAuth2PasswordRequestForm = Depends()):
   # Retrun the access token with the value of the encoded jwt token, set type to bearer
   return {'access_token' : token, 'token_type' : 'bearer'}
 
+# Helper method to get current user
 # Since get current user Depends on oath2_scheme it will return that lock on the users/me route beacuse
 # its in the OAuth dependency chain: /users/me Depends on get_current_user which Depends on oauth2_scheme
 async def get_current_user(token: str = Depends(oauth2_scheme)):
-  return
+  try:
+    # Decode the jwt token, get the value of id from the decoded token
+    payload = jwt.decode(token, JWT_SECRET, algorithms='HS256')
+    user = await User.get(id=payload.get('id'))
+  except:
+    raise HTTPException(
+      status_code= status.HTTP_401_UNAUTHORIZED,
+      detail='Invalid username or password'
+    )
+  # User_Pydantic is being used to pass the token, Users themselves are not passing the token
+  return await User_Pydantic.from_tortoise_orm(user)
 
-# Enpoint to add users UserIn is for user input, User is output
+# Enpoint to add users. UserIn is for user input, User is output
 @app.post('/users', response_model=User_Pydantic)
 async def create_user(user: UserIn_Pydantic):
   # User object will get the username and password(hashed with bcrypt here) passed into it
@@ -75,13 +86,13 @@ async def create_user(user: UserIn_Pydantic):
   # Convert the user object from tortoise orm to a User_Pydantic object (response type)
   return await User_Pydantic.from_tortoise_orm(user_obj)
 
-# Get user using Pydanctic object because it Depends on the current user (will run first)
+# Endpoint to Get current user
+# Using Pydanctic object because it Depends on the current user (will run first)
 @app.get('/users/me', response_model=User_Pydantic)
-async def get_user(user: User_Pydantic = Depends(get_user_current)):
+async def get_user(user: User_Pydantic = Depends(get_current_user)):
   return user
 
-
-# Authenticate the user
+# Helper method to Authenticate the user
 # Get the user from the db, verify they exist and password is valid - return user if valid
 async def authenticate_user(username: str, password: str):
   user = await User.get(username=username)
